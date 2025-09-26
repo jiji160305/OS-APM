@@ -19,9 +19,6 @@ from sklearn import preprocessing
 from sklearn.preprocessing import StandardScaler
 from sklearn.ensemble import RandomForestClassifier
 from sklearn import tree
-from sklearn.metrics import classification_report, confusion_matrix,accuracy_score
-from sklearn.model_selection import RandomizedSearchCV, cross_val_predict
-from progress.bar import Bar
 import joblib
 
 # Read image
@@ -111,41 +108,8 @@ def waterextract(img):
     return water
 
 
-# Edge probability
-def edge_probability(img):
-    i = 1
-    [m, n] = img.shape
-    a = math.sqrt(2)/2
-    w = [1, a, 1, a, 1, a, 1, a]
-    xk = [0, -1, -1, -1, 0, 1, 1, 1]
-    yk = [1, 1, 0, -1, -1, -1, 0, 1]
-    probability = np.zeros([m, n])
-    while i < m-1:
-        j = 1
-        while j < n-1:
-            sum = 0
-            for index in range(0, 8):
-                diff = float(img[i, j])-float(img[i+xk[index], j+yk[index]])
-                dis = float(np.abs(diff)*w[index])
-                sum = sum+dis
-            probability[i, j] = sum/(4+4*a)
-            j = j+1
-        i = i+1
-    return probability
 
-# Fill the hole
-def FillHole(mask):
-    contours, hierarchy = cv2.findContours(mask, cv2.RETR_TREE, cv2.CHAIN_APPROX_SIMPLE)
-    len_contour = len(contours)
-    print(len_contour)
-    contour_list = []
-    for i in range(len_contour):
-        drawing = np.zeros_like(mask, np.uint8)  # create a black image
-        img_contour = cv2.drawContours(drawing, contours, i, (255, 255, 255), -1)
-        contour_list.append(img_contour)
 
-    out = sum(contour_list)
-    return out
 
 
 ## Register the VV and VH
@@ -381,21 +345,7 @@ def mergedImg(VH_path,VV_path,S2_path, DEM_path, Slope_path):
     return merged
 
 
-# Calculate train-test features
 
-def Cal_features(gdf):
-    gdf['area'] = gdf.area.divide(100)
-    gdf['perimeter'] = gdf.length.divide(10)
-    gdf['P2A'] = gdf['perimeter'].pow(2).divide(gdf['area'])
-    gdf['SI'] = gdf['perimeter'].pow(2).divide(4*np.sqrt(gdf['area']))
-    gdf['compactness'] = 2*np.sqrt(math.pi* gdf['area']).divide(gdf['perimeter'])
-    gdf['min_rect'] = gdf['geometry'].apply(lambda x: x.minimum_rotated_rectangle)
-    gdf['min_rect_area'] = gdf['min_rect'].apply(lambda x: x.area)
-    gdf['ER'] = gdf['area'].divide(gdf['min_rect_area'].divide(100))
-    gdf['Width'] = (gdf['perimeter']-np.sqrt(gdf['perimeter'].pow(2)-16*gdf['area'])).divide(4)
-    gdf['Length'] = (gdf['perimeter']+np.sqrt(gdf['perimeter'].pow(2)-16*gdf['area'])).divide(4)
-    gdf['LW'] = gdf['Length'].divide(gdf['Width'])
-    return gdf
 
 # Define img features
 def imlabel_feature(labels,intensity_image):
@@ -566,136 +516,65 @@ def imlabel_feature(labels,intensity_image):
 
 if __name__ == '__main__':
     
-    # Set workspace
-    S1_Path = r'K:\01_Date-Collection\01_Satellite\01_Sentinel-1\2023'
-    os.chdir(S1_Path)
-    print(os.getcwd())
     
-    result_path = r'E:\AQ_2023'
+    VH_filepath = ''
+    VV_filepath = ''
+    S2_filepath = ''
+    dem_filepath = ''
+    slope_filepath = ''
+    SR_filepath = ''
+    result_name = ''
+    ndwi_filepath = ''
+    
+    VH_data, VH_width, VH_height, VH_bands, VH_geotransform, VH_projection = ReadTif(VH_filepath)
+    VV_data, VV_width, VV_height, VV_bands, VV_geotransform, VV_projection = ReadTif(VV_filepath)
+    
+    SR_data, SR_width, SR_height, SR_bands, SR_geotransform, SR_projection = ReadTif(SR_filepath)
+    ndwi_data, ndwi_width, ndwi_height, ndwi_bands, ndwi_geotransform, ndwi_projection = ReadTif(ndwi_filepath)
+    
+    VH_data = np.nan_to_num(VH_data, nan=np.nanmean(VH_data))
+    VV_data = np.nan_to_num(VV_data, nan=np.nanmean(VV_data))
+    
+    VVmVH = VH_data*VV_data
     
     ##Load model
-    rfc = joblib.load(r'D:\Syn\BaiduSyncdisk\08_code\02_python\Aqua_mapping\random_forest_model-v1-py3.pkl')
+    rfc = joblib.load(r'random_forest_model-v1-py3.pkl')
     
-    ##Get tif list
-    S1_list = os.listdir(S1_Path)
-    S1_names = [S1_name for S1_name in S1_list if S1_name.endswith('.tif')]
     
-    ## Get S2 list
-    S2_path = r'J:\NDWI_2023'
-    S2_list = os.listdir(S2_path)
-    S2_names = [S2_name for S2_name in S2_list if S2_name.endswith('.tif')]
+    img_nor = normalized(VVmVH, VH_height, VH_width)
+    water_extent = waterextract(img_nor)
     
-    ## Get DEM list
-    dem_path = r'K:\01_Date-Collection\01_Satellite\03_DEM'
-    dem_list = os.listdir(dem_path)
-    dem_names = [dem_name for dem_name in dem_list if dem_name.endswith('.tif')]
+    SR = SR_data>0.4
+    nowater = ndwi_data<-0.1
+    condition = SR | nowater
+    water_extent[condition] = 0
     
-    ## Get slope list
-    slope_path = r'K:\01_Date-Collection\01_Satellite\04_slope'
-    slope_list = os.listdir(slope_path)
-    slope_names = [slope_name for slope_name in slope_list if slope_name.endswith('.tif')]
-    
-    # SamplePath = r'K:\01_Date-Collection\01_Satellite\02_Sentinel-2\NDWI_training'
-    # sample_list = os.listdir(SamplePath)
-    # sample_names = [file_name for file_name in sample_list if file_name.endswith('.tif')]
-    # gridcode = []
-    # for tif in sample_names:
-    #     grid = tif.split("_")[1]
-    #     if grid not in gridcode:
-    #         gridcode.append(grid)
-    # Get unique gridcode
-    gridcode = []
-    for tif in S1_names:
-        grid = tif.split("_")[1]
-        if grid not in gridcode:
-            gridcode.append(grid)
-            
-            
-    error_gird = []
-    
+    water = morphology.remove_small_holes(water_extent,100)
+    labels = measure.label(water, background = 0, connectivity = 1)
+    Filter_labels = morphology.remove_small_objects(labels, min_size = 10, connectivity= 2)
+    merged = mergedImg(VH_filepath,VV_filepath,S2_filepath,dem_filepath,slope_filepath)
+    label_feature = imlabel_feature(Filter_labels,merged)
+    input_feature = label_feature.iloc[:,1:]
+    input_feature = input_feature.dropna(subset=['VV_mean','VH_mean'],how='all')
+    ##Predict
+    predict = rfc.predict(input_feature)
+    predict1 = predict.tolist()
+    label_Id=0
+    pre_result = Filter_labels.copy()
+    object_ids = label_feature['labels'].to_list()
+    for predict_result in predict1:
+        if predict_result ==1:
+            Id = object_ids[label_Id]
+            pre_result[pre_result==Id] = 1
+        else:
+            Id = object_ids[label_Id]
+            pre_result[pre_result==Id] = 0
+        label_Id+=1
+    Savetiff(pre_result, VH_width, VH_height, VH_bands, VH_geotransform, VH_projection, result_name)
 
-    for i in gridcode:
-        try:
-            result_name = os.path.join(result_path,'result_'+str(i)+'_2023.tif')
-            if  os.path.exists(result_name):
-                print(f'已经存在{str(i)}')
-                continue
-            else:
-                print(f'开始处理第{str(i)}个grid')
-            
-
-            
-            ## S1文件名
-            VH_filename = [element for element in S1_names if str(i) == element.split("_")[1] and 'VH' in element][0]
-            VV_filename = [element for element in S1_names if str(i) == element.split("_")[1] in element and 'VV' in element][0]
-            print(VH_filename,VV_filename)
-            
-            ##读取VV,VH
-            VH_filepath = os.path.join(S1_Path, VH_filename)
-            VV_filepath = os.path.join(S1_Path, VV_filename)
-            
-            ##读取以及NAN去除
-            if not os.path.exists(VH_filepath) or not os.path.exists(VV_filepath):
-                print(f"缺失影像{str(i)}")
-                continue
-            else:
-                VH_data, VH_width, VH_height, VH_bands, VH_geotransform, VH_projection = ReadTif(VH_filepath)
-                VV_data, VV_width, VV_height, VV_bands, VV_geotransform, VV_projection = ReadTif(VV_filepath)
-                                                                                                 
-            if np.isnan(VH_data).any() or np.isnan(VV_data).any():
-                VH_data = np.nan_to_num(VH_data, nan=np.nanmean(VH_data))
-                VV_data = np.nan_to_num(VV_data, nan=np.nanmean(VV_data))
-            VVmVH = VH_data*VV_data
-            
-            ##读取S2
-            S2_filename = [element for element in S2_names if str(i) == element.split("_")[1]][0]
-            S2_filepath = os.path.join(S2_path,S2_filename)
-            
-            ## 读取DEM
-            dem_filename = [element for element in dem_names if str(i) == element.split("_")[1]][0]
-            dem_filepath = os.path.join(dem_path,dem_filename)
-            
-            ## 读取slope
-            slope_filename = [element for element in slope_names if str(i) == element.split("_")[1]][0]
-            slope_filepath = os.path.join(slope_path,slope_filename)
-
-            
-            
-            img_nor = normalized(VVmVH, VH_height, VH_width)
-            water_extent = waterextract(img_nor)
-            water = morphology.remove_small_holes(water_extent,100)
-            labels = measure.label(water, background = 0, connectivity = 1)
-            Filter_labels = morphology.remove_small_objects(labels, min_size = 10, connectivity= 2)
-            merged = mergedImg(VH_filepath,VV_filepath,S2_filepath,dem_filepath,slope_filepath)
-            label_feature = imlabel_feature(Filter_labels,merged)
-            input_feature = label_feature.iloc[:,1:]
-            input_feature = input_feature.dropna(subset=['VV_mean','VH_mean'],how='all')
-            ##Predict
-            predict = rfc.predict(input_feature)
-            predict1 = predict.tolist()
-            label_Id=0
-            pre_result = Filter_labels.copy()
-            object_ids = label_feature['labels'].to_list()
-            for predict_result in predict1:
-                if predict_result ==1:
-                    Id = object_ids[label_Id]
-                    pre_result[pre_result==Id] = 1
-                else:
-                    Id = object_ids[label_Id]
-                    pre_result[pre_result==Id] = 0
-                label_Id+=1
-            Savetiff(pre_result, VH_width, VH_height, VH_bands, VH_geotransform, VH_projection, result_name)
-            print(f'第{str(i)}完成')
-        except Exception as e:
-            error_gird.append(i)
-            print("发生异常",e)
-                
-    print(error_gird)
     
-    misgrid = pd.DataFrame(error_gird, columns = ['grid'])
-    misgrid.to_csv(r'D:\Syn\BaiduSyncdisk\08_code\02_python\Aqua_mapping\misgird_2023.csv', index=False)
-
-    print('finish!')
+    
+    
       
 
         
