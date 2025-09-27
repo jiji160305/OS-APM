@@ -1,27 +1,15 @@
-
+## OS-APM: Optical-SAR Aquaculture Pond Mapping
 
 import numpy as np
 import cv2
-import matplotlib.pyplot as plt
 from osgeo import gdal, gdalconst
 import math
-from skimage import measure, color, morphology
-from skimage import feature
-from skimage import filters
-from skimage import exposure
-import geopandas as gpd
+from skimage import measure,  morphology
 import pandas as pd
-import os
-import time
-import scipy
-from sklearn.feature_extraction import DictVectorizer
-from sklearn import preprocessing
-from sklearn.preprocessing import StandardScaler
 from sklearn.ensemble import RandomForestClassifier
-from sklearn import tree
 import joblib
 
-# Read image
+
 def ReadTif(filepath):
     dataset = gdal.Open(filepath)
     im_bands = dataset.RasterCount
@@ -33,19 +21,19 @@ def ReadTif(filepath):
         im_data = dataset.ReadAsArray(0, 0, im_width, im_height)
         im_data = np.flipud(im_data)
         geotransform = (
-            geotransform[0],  # 左上角 x 坐标
-            geotransform[1],  # x 方向像元大小
-            geotransform[2],  # x 方向旋转参数
-            geotransform[3]+ geotransform[5] * im_height,  # 左上角 y 坐标
-            geotransform[4],  # y 方向旋转参数并取反
-            -geotransform[5]  # y 方向像元大小
+            geotransform[0],  
+            geotransform[1],  
+            geotransform[2],  
+            geotransform[3]+ geotransform[5] * im_height,  
+            geotransform[4],  
+            -geotransform[5]  
             )
     else:
         im_data = dataset.ReadAsArray(0, 0, im_width, im_height)
     return im_data, im_width,im_height,im_bands,geotransform,im_projection
 
 
-## Save image
+
 def Savetiff(im_data, im_width, im_height, im_bands, im_geotrans, im_proj, filepath):
     if 'int8' in im_data.dtype.name:
         datatype = gdal.GDT_Byte
@@ -71,7 +59,7 @@ def Savetiff(im_data, im_width, im_height, im_bands, im_geotrans, im_proj, filep
     del dataset
 
 
-# Normalized
+
 def normalized(imdata, im_height, im_width):
     i = 0
     img_nor = np.zeros([im_height, im_width])
@@ -89,18 +77,18 @@ def normalized(imdata, im_height, im_width):
     return img_nor
 
 
-# Water mapping
+
 def waterextract(img):
-    # 0-255
+ 
     img = img * 255
     img_data = np.uint8(img)
-    # Otsu extract water
+    
     ret1, Otsu = cv2.threshold(img_data, 0, 255, cv2.THRESH_BINARY + cv2.THRESH_OTSU)
     Water_extent = cv2.bitwise_and(img_data, Otsu)
-    # Morphological operation;
+
     kernel = np.ones((5, 5), np.uint8)
     can_region = cv2.dilate(Water_extent, kernel)
-    # Adaptive threshold
+
     im_AT = cv2.bitwise_and(img_data, can_region)
     AT_water = cv2.adaptiveThreshold(im_AT, 255, cv2.ADAPTIVE_THRESH_GAUSSIAN_C, \
                                 cv2.THRESH_BINARY, 7, 5 )
@@ -108,157 +96,20 @@ def waterextract(img):
     return water
 
 
-
-
-
-
-## Register the VV and VH
-
-def get_intersection(VH_path,VV_path,S2_path, DEM_path, Slope_path,label_path):
-    # 打开VV,VH影像
-    VH = gdal.Open(VH_path)
-    VV = gdal.Open(VV_path)
-    
-    ##打开S2
-    S2 = gdal.Open(S2_path)
-    NDWI = S2.GetRasterBand(1)
-    NDVI = S2.GetRasterBand(2)
-    ##打开DEM
-    DEM = gdal.Open(DEM_path)
-    slope = gdal.Open(Slope_path)
-    # 打开label影像
-    label = gdal.Open(label_path)
-    
-    # 获取VH影像的范围
-    Flip_label_VH = False
-    VH_geo_transform = VH.GetGeoTransform()
-    if VH_geo_transform[5]>0:
-        VH_geo_transform = list(VH_geo_transform)
-        VH_y_max = VH_geo_transform[3]+VH_geo_transform[5] * VH.RasterYSize
-        VH_y_min = VH_geo_transform[3]
-        VH_geo_transform[5] = -VH_geo_transform[5]
-        Flip_label_VH = True
-    else:
-        VH_y_max = VH_geo_transform[3]
-        VH_y_min = VH_y_max + VH_geo_transform[5] * VH.RasterYSize
-    VH_x_min = VH_geo_transform[0]
-    VH_x_max = VH_x_min + VH_geo_transform[1] * VH.RasterXSize
-    
-    # 获取S2影像的范围
-    Flip_S2 = False
-    S2_geo_transform = S2.GetGeoTransform()
-    if S2_geo_transform[5]>0:
-        Flip_S2 = True
-        
-    # 获取DEM影像的范围
-    Flip_DEM = False
-    DEM_geo_transform = DEM.GetGeoTransform()
-    if DEM_geo_transform[5]>0:
-        Flip_DEM = True
-        
-    # 获取DEM影像的范围
-    Flip_slope = False
-    DEM_geo_transform = DEM.GetGeoTransform()
-    if DEM_geo_transform[5]>0:
-        Flip_DEM = True
-    
-    # 获取slope影像的范围
-    Flip_slope = False
-    slope_geo_transform = slope.GetGeoTransform()
-    if slope_geo_transform[5]>0:
-        Flip_slope = True
-    
-    # 获取slope影像的范围
-    Flip_label_VV = False
-    VV_geo_transform = VV.GetGeoTransform()
-    if VV_geo_transform[5]>0:
-        Flip_label_VV = True
-    
-    # 获取label的范围
-    label_geo_transform = label.GetGeoTransform()
-    label_x_min = label_geo_transform[0]
-    label_y_max = label_geo_transform[3]
-    label_x_max = label_x_min + label_geo_transform[1] * label.RasterXSize
-    label_y_min = label_y_max + label_geo_transform[5] * label.RasterYSize
-    
-    # 计算两张影像相交的范围
-    x_min = max(VH_x_min, label_x_min)
-    y_max = min(VH_y_max, label_y_max)
-    x_max = min(VH_x_max, label_x_max)
-    y_min = max(VH_y_min, label_y_min)
-    
-    # 计算相交区域的宽度和高度
-    width = int((x_max - x_min) / VH_geo_transform[1])+1
-    height = -int((y_max - y_min) / VH_geo_transform[5])+1
-    
-    ## offset
-    col = int((x_min - VH_x_min) / VH_geo_transform[1])
-    row = int((y_max - VH_y_max) / VH_geo_transform[5])
-    
-    # 读取相交区域的影像数据
-    if Flip_label_VH:
-        VH_data = np.flipud(VH.ReadAsArray(col,row,width,height))
-    else:
-        VH_data = VH.ReadAsArray(col,row,width,height)
-    
-    if Flip_label_VV:
-        VV_data = np.flipud(VV.ReadAsArray(col,row,width,height))
-    else:
-        VV_data = VV.ReadAsArray(col,row,width,height)
-    
-    if Flip_S2:
-        NDWI_data = np.flipud(NDWI.ReadAsArray(col,row,width,height))
-        NDVI_data = np.flipud(NDVI.ReadAsArray(col,row,width,height))
-    else:
-        NDWI_data = NDWI.ReadAsArray(col,row,width,height)
-        NDVI_data = NDVI.ReadAsArray(col,row,width,height)
-    
-    if Flip_DEM:
-        DEM_band = DEM.GetRasterBand(1)
-        DEM_data = np.flipud(DEM_band.ReadAsArray(col,row,width,height))
-    else:
-        DEM_band = DEM.GetRasterBand(1)
-        DEM_data = DEM_band.ReadAsArray(col,row,width,height)
-        
-    if Flip_slope:
-        slope_band = slope.GetRasterBand(1)
-        slope_data = np.flipud(slope_band.ReadAsArray(col,row,width,height))
-    else:
-        slope_band = slope.GetRasterBand(1)
-        slope_data = slope_band.ReadAsArray(col,row,width,height)
-        
-    
-    VVmVH = VH_data*VV_data
-    
-    DEM_data = np.where(DEM_data >10000, 0, DEM_data)
-    slope_data = np.where(slope_data >10000, 0, slope_data)
-
-    merged = np.stack((VH_data, VV_data, VVmVH, NDWI_data, NDVI_data, DEM_data, slope_data), axis=2)
-    # 关闭影像文件
-    VH = None
-    label = None
-    VV = None
-    DEM = None
-    S2 = None
-    slope = None
-    return merged
-
-## Register the VV and VH
-
 def mergedImg(VH_path,VV_path,S2_path, DEM_path, Slope_path):
-    # 打开VV,VH影像
+
     VH = gdal.Open(VH_path)
     VV = gdal.Open(VV_path)
     
-    ##打开S2
+ 
     S2 = gdal.Open(S2_path)
     NDWI = S2.GetRasterBand(1)
     NDVI = S2.GetRasterBand(2)
-    ##打开DEM
+
     DEM = gdal.Open(DEM_path)
     slope = gdal.Open(Slope_path)
     
-    # 获取VH影像的范围
+
     Flip_label_VH = False
     VH_geo_transform = VH.GetGeoTransform()
     if VH_geo_transform[5]>0:
@@ -266,38 +117,38 @@ def mergedImg(VH_path,VV_path,S2_path, DEM_path, Slope_path):
         VH_geo_transform[5] = -VH_geo_transform[5]
         Flip_label_VH = True
     
-    # 获取S2影像的范围
+  
     Flip_S2 = False
     S2_geo_transform = S2.GetGeoTransform()
     if S2_geo_transform[5]>0:
         Flip_S2 = True
         
-    # 获取DEM影像的范围
+
     Flip_DEM = False
     DEM_geo_transform = DEM.GetGeoTransform()
     if DEM_geo_transform[5]>0:
         Flip_DEM = True
         
-    # 获取DEM影像的范围
+
     Flip_slope = False
     DEM_geo_transform = DEM.GetGeoTransform()
     if DEM_geo_transform[5]>0:
         Flip_DEM = True
     
-    # 获取slope影像的范围
+
     Flip_slope = False
     slope_geo_transform = slope.GetGeoTransform()
     if slope_geo_transform[5]>0:
         Flip_slope = True
     
-    # 获取slope影像的范围
+
     Flip_label_VV = False
     VV_geo_transform = VV.GetGeoTransform()
     if VV_geo_transform[5]>0:
         Flip_label_VV = True
     
     
-    # 读取相交区域的影像数据
+
     if Flip_label_VH:
         VH_data = np.flipud(VH.ReadAsArray())
     else:
@@ -336,7 +187,7 @@ def mergedImg(VH_path,VV_path,S2_path, DEM_path, Slope_path):
     slope_data = np.where(slope_data >10000, 0, slope_data)
 
     merged = np.stack((VH_data, VV_data, VVmVH, NDWI_data, NDVI_data, DEM_data, slope_data), axis=2)
-    # 关闭影像文件
+
     VH = None
     VV = None
     DEM = None
@@ -516,15 +367,17 @@ def imlabel_feature(labels,intensity_image):
 
 if __name__ == '__main__':
     
+    ##Load model
+    rfc = joblib.load('random_forest_model-v1-py3.pkl')
     
-    VH_filepath = ''
-    VV_filepath = ''
-    S2_filepath = ''
-    dem_filepath = ''
-    slope_filepath = ''
-    SR_filepath = ''
-    result_name = ''
-    ndwi_filepath = ''
+    VH_filepath = r'testdata\VH.tif'
+    VV_filepath = r'testdata\VV.tif'
+    S2_filepath = r'\Sentinel-2.tif'
+    dem_filepath = r'dem.tif'
+    slope_filepath = r'slope.tif'
+    SR_filepath = r'SR.tif'
+    result_name = r'result.tif'
+    ndwi_filepath = r'ndwi.tif'
     
     VH_data, VH_width, VH_height, VH_bands, VH_geotransform, VH_projection = ReadTif(VH_filepath)
     VV_data, VV_width, VV_height, VV_bands, VV_geotransform, VV_projection = ReadTif(VV_filepath)
@@ -537,8 +390,7 @@ if __name__ == '__main__':
     
     VVmVH = VH_data*VV_data
     
-    ##Load model
-    rfc = joblib.load(r'random_forest_model-v1-py3.pkl')
+
     
     
     img_nor = normalized(VVmVH, VH_height, VH_width)
